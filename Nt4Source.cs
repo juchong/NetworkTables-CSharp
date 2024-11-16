@@ -7,7 +7,8 @@ namespace NetworkTables
     public class Nt4Source
     {
         public readonly Nt4Client Client;
-        
+
+        private readonly Dictionary<string, TopicValue<string>> _stringValues = new();
         private readonly Dictionary<string, TopicValue<long>> _longValues = new();
         private readonly Dictionary<string, TopicValue<double>> _doubleValues = new();
         private readonly Dictionary<string, TopicValue<double[]>> _doubleArrayValues = new();
@@ -27,7 +28,7 @@ namespace NetworkTables
         
         public void PublishTopic(string topic, string type)
         {
-            if (Client.Connected)
+            if (Client.Connected())
             {
                 Client.PublishTopic(topic, type);
             }
@@ -36,7 +37,7 @@ namespace NetworkTables
         
         public void PublishValue(string topic, object value)
         {
-            if (Client.Connected)
+            if (Client.Connected())
             {
                 Client.PublishValue(topic, value);
             }
@@ -44,7 +45,7 @@ namespace NetworkTables
         
         public void Subscribe(string topic, double period = 0.1, bool all = false, bool topicsOnly = false, bool prefix = false)
         {
-            if (Client.Connected)
+            if (Client.Connected())
             {
                 Client.Subscribe(topic, period, all, topicsOnly, prefix);
             }
@@ -66,6 +67,9 @@ namespace NetworkTables
         {
             switch (topic.Type)
             {
+                case "string":
+                    AddString(topic.Name, timestamp, value);
+                    break;
                 case "int":
                     AddInteger(topic.Name, timestamp, value);
                     break;
@@ -77,7 +81,22 @@ namespace NetworkTables
                     break;
             }
         }
-        
+
+        /// <summary>
+        /// Get the latest integer value of a topic
+        /// </summary>
+        /// <param name="key">The topic to get the value of</param>
+        /// <returns>The latest string value of the topic, or 0 if it doesn't exist</returns>
+        public string GetString(string key)
+        {
+            if (_stringValues.TryGetValue(key, out var value))
+            {
+                return value.GetValue();
+            }
+
+            return "";
+        }
+
         /// <summary>
         /// Get the latest integer value of a topic
         /// </summary>
@@ -117,7 +136,13 @@ namespace NetworkTables
 
             return new double[0];
         }
-        
+
+        private void AddString(string key, long timestamp, object value)
+        {
+            _stringValues.TryAdd(key, new TopicValue<string>());
+            _stringValues[key].AddValue(timestamp, Convert.ToString(value));
+        }
+
         private void AddInteger(string key, long timestamp, object value)
         {
             _longValues.TryAdd(key, new TopicValue<long>());

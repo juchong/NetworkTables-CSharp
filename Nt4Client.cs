@@ -37,8 +37,6 @@ namespace NetworkTables
         
         
         private WebSocket _ws;
-        public bool Connected;
-        private bool _connecting;
         private long? _serverTimeOffsetUs;
         private long _networkLatencyUs;
 
@@ -68,17 +66,28 @@ namespace NetworkTables
         /// <summary>
         /// Connect to the NetworkTables server.
         /// </summary>
-        public void Connect()
+        public (bool success, string errorMessage) Connect()
         {
-            if (_connecting) return;
-            _connecting = true;
-            _ws = new WebSocket(_serverAddress);
-            _ws.OnOpen += OnOpen;
-            _ws.OnOpen += _onOpen;
-            _ws.OnMessage += OnMessage;
-            _ws.OnError += OnError;
-            _ws.OnClose += OnClose;
-            _ws.ConnectAsync();
+            try
+            {
+                if (_ws != null && (_ws.ReadyState == WebSocketState.Open || _ws.ReadyState == WebSocketState.Connecting))
+                {
+                    return (true, null); // Already connected or connecting
+                }
+
+                _ws = new WebSocket(_serverAddress);
+                _ws.OnOpen += OnOpen;
+                _ws.OnMessage += OnMessage;
+                _ws.OnError += OnError;
+                _ws.OnClose += OnClose;
+
+                _ws.Connect();
+                return (true, null);
+            }
+            catch (Exception ex)
+            {
+                return (false, ex.Message);
+            }
         }
         
         /// <summary>
@@ -86,9 +95,8 @@ namespace NetworkTables
         /// </summary>
         public void Disconnect()
         {
-            if (Connected)
+            if (Connected())
             {
-                Connected = false;
                 _ws.Close();
             }
         }
@@ -97,7 +105,6 @@ namespace NetworkTables
         private void OnOpen(object sender, EventArgs e)
         {
             Debug.Log("[NT4] Connected with identity " + _appName);
-            Connected = true;
             WsSendTimestamp();
             
             
@@ -158,7 +165,7 @@ namespace NetworkTables
         public void PublishTopic(string key, string type)
         {
             Nt4Topic topic = new Nt4Topic(GetNewUid(), key, type, new Dictionary<string, object>());
-            if (!Connected || _publishedTopics.ContainsKey(key)) return;
+            if (!Connected() || _publishedTopics.ContainsKey(key)) return;
             _publishedTopics.Add(key, topic);
             WsPublishTopic(topic);
         }
@@ -172,7 +179,7 @@ namespace NetworkTables
         public void PublishTopic(string key, string type, Dictionary<string, object> properties)
         {
             Nt4Topic topic = new Nt4Topic(GetNewUid(), key, type, properties);
-            if (!Connected || _publishedTopics.ContainsKey(key)) return;
+            if (!Connected() || _publishedTopics.ContainsKey(key)) return;
             _publishedTopics.Add(key, topic);
             WsPublishTopic(topic);
         }
@@ -183,7 +190,7 @@ namespace NetworkTables
         /// <param name="key">The topic to unpublish</param>
         public void UnpublishTopic(string key)
         {
-            if (!Connected) return;
+            if (!Connected()) return;
             if (!_publishedTopics.ContainsKey(key))
             {
                 Debug.LogWarning("[NT4] Attempted to unpublish topic that was not published: " + key);
@@ -202,14 +209,14 @@ namespace NetworkTables
         public void PublishValue(string key, object value)
         {
             long timestamp = GetServerTimeUs() ?? 0;
-            if (!Connected) return;
+            if (!Connected()) return;
             if (!_publishedTopics.ContainsKey(key))
             {
                 Debug.LogWarning("[NT4] Attempted to publish value for topic that was not published: " + key);
                 return;
             }
             Nt4Topic topic = _publishedTopics[key];
-            WsSendBinary(MessagePackSerializer.Serialize(new[] {topic.Uid, timestamp, TypeStrIdxLookup[topic.Type], value}));
+            WsSendBinary(MessagePackSerializer.Serialize(new[] { topic.Uid, timestamp, TypeStrIdxLookup[topic.Type], value }));
         }
 
         /// <summary>
@@ -223,7 +230,7 @@ namespace NetworkTables
         /// <returns>The ID of the subscription (for unsubscribing), -1 if not connected</returns>
         public int Subscribe(string key, double periodic = 0.1, bool all = false, bool topicsOnly = false, bool prefix = false)
         {
-            if(!Connected) return -1;
+            if(!Connected()) return -1;
             Nt4SubscriptionOptions opts = new Nt4SubscriptionOptions(periodic, all, topicsOnly, prefix);
             Nt4Subscription sub = new Nt4Subscription(GetNewUid(), new[]{key}, opts);
             WsSubscribe(sub);
@@ -239,7 +246,7 @@ namespace NetworkTables
         /// <returns>The ID of the subscription (for unsubscribing), -1 if not connected</returns>
         public int Subscribe(string key, Nt4SubscriptionOptions opts)
         {
-            if(!Connected) return -1;
+            if(!Connected()) return -1;
             Nt4Subscription sub = new Nt4Subscription(GetNewUid(), new[]{key}, opts);
             WsSubscribe(sub);
             _subscriptions.Add(sub.Uid, sub);
@@ -257,7 +264,7 @@ namespace NetworkTables
         /// <returns>The ID of the subscription (for unsubscribing)</returns>
         public int Subscribe(string[] keys, double periodic = 0.1, bool all = false, bool topicsOnly = false, bool prefix = false)
         {
-            if(!Connected) return -1;
+            if(!Connected()) return -1;
             Nt4SubscriptionOptions opts = new Nt4SubscriptionOptions(periodic, all, topicsOnly, prefix);
             Nt4Subscription sub = new Nt4Subscription(GetNewUid(), keys, opts);
             WsSubscribe(sub);
@@ -271,7 +278,7 @@ namespace NetworkTables
         /// <param name="uid">The ID of the subscription</param>
         public void Unsubscribe(int uid)
         {
-            if(!Connected) return;
+            if(!Connected()) return;
             if (!_subscriptions.ContainsKey(uid))
             {
                 Debug.LogWarning("[NT4] Attempted to unsubscribe from a subscription that does not exist: " + uid);
@@ -285,7 +292,7 @@ namespace NetworkTables
         // ws utility functions
         private void WsSendJson(string method, Dictionary<string, object> paramsObj)
         {
-            if (!Connected) return;
+            if (!Connected()) return;
             Dictionary<string, object> msg = new Dictionary<string, object>
             {
                 { "method", method },
@@ -295,9 +302,13 @@ namespace NetworkTables
             _ws.SendAsync(JsonConvert.SerializeObject(new object[] {msg}), null);
         }
         
-        private void WsSendBinary(byte[] data)
+void WsSendBinary(byte[] data)
         {
-            if (!Connected) return;
+            if (!Connected())
+            {
+                Debug.LogWarning("WebSocket is not open. Cannot send data.");
+                return;
+            }
             _ws.SendAsync(data, null);
         }
 
@@ -405,6 +416,11 @@ namespace NetworkTables
         {   
             // Return a random int
             return new Random().Next(0, 10000000);
+        }
+
+        public bool Connected()
+        {
+            return _ws != null && _ws.ReadyState == WebSocketState.Open;
         }
     }
 }
